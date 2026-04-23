@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { db } from '@/lib/firebase/client'
+import { doc, updateDoc } from 'firebase/firestore'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
@@ -16,21 +17,17 @@ const statuses = [
 export default function UpdateRequestStatus({ requestId, currentStatus }) {
   const [status, setStatus] = useState(currentStatus)
   const router = useRouter()
-  const supabase = createClient()
 
   const handleChange = async (newStatus) => {
     setStatus(newStatus)
-    const { error } = await supabase
-      .from('requests')
-      .update({ status: newStatus })
-      .eq('id', requestId)
-
-    if (error) {
-      toast.error('Eroare la actualizare')
-      setStatus(currentStatus)
-    } else {
+    try {
+      await updateDoc(doc(db, 'requests', requestId), { status: newStatus })
       toast.success('Status actualizat!')
       router.refresh()
+    } catch (error) {
+      console.error(error)
+      toast.error('Eroare la actualizare')
+      setStatus(currentStatus)
     }
   }
 

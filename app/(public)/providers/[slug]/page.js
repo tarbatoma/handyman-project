@@ -1,4 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
+import { adminDb, adminAuth } from '@/lib/firebase/server'
+import { cookies } from 'next/headers'
 import { notFound } from 'next/navigation'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -11,14 +12,10 @@ import FavoriteButton from '@/components/providers/FavoriteButton'
 
 export async function generateMetadata({ params }) {
   const { slug } = await params
-  const supabase = await createClient()
-  const { data } = await supabase
-    .from('provider_profiles')
-    .select('business_name, short_description')
-    .eq('slug', slug)
-    .single()
-
-  if (!data) return { title: 'Prestator negăsit' }
+  const snap = await adminDb.collection('providers').where('slug', '==', slug).limit(1).get()
+  
+  if (snap.empty) return { title: 'Prestator negăsit' }
+  const data = snap.docs[0].data()
   return {
     title: data.business_name,
     description: data.short_description,
@@ -27,40 +24,86 @@ export async function generateMetadata({ params }) {
 
 export default async function ProviderProfilePage({ params }) {
   const { slug } = await params
-  const supabase = await createClient()
+  
+  const providerSnap = await adminDb.collection('providers')
+    .where('slug', '==', slug)
+    .where('is_active', '==', true)
+    .limit(1)
+    .get()
 
-  const { data: provider } = await supabase
-    .from('provider_profiles')
-    .select(`
-      id, business_name, slug, short_description, long_description,
-      years_experience, starting_price, response_time, is_verified, is_active,
-      average_rating, total_reviews, created_at,
-      user:user_id(avatar_url, full_name, phone),
-      provider_services(
-        id, title, description, price_from, price_to, price_unit,
-        category:category_id(name, slug, icon)
-      ),
-      provider_areas(area:area_id(name, slug)),
-      provider_portfolio(id, image_url, caption),
-      reviews(
-        id, rating, comment, created_at,
-        client:client_id(full_name, avatar_url)
-      )
-    `)
-    .eq('slug', slug)
-    .eq('is_active', true)
-    .single()
+  if (providerSnap.empty) notFound()
 
-  if (!provider) notFound()
+  const providerDoc = providerSnap.docs[0]
+  let provider = { id: providerDoc.id, ...providerDoc.data() }
+  const pid = provider.id
 
-  const { data: { user } } = await supabase.auth.getUser()
-  const { data: currentProfile } = user
-    ? await supabase.from('profiles').select('role, id').eq('id', user.id).single()
-    : { data: null }
+  const [
+    userSnap,
+    svcsSnap,
+    areasSnap,
+    portfolioSnap,
+    reviewsSnap,
+    catsSnap,
+    allAreasSnap
+  ] = await Promise.all([
+    adminDb.collection('users').doc(pid).get(),
+    adminDb.collection('provider_services').where('provider_id', '==', pid).get(),
+    adminDb.collection('provider_areas').where('provider_id', '==', pid).get(),
+    adminDb.collection('provider_portfolio').where('provider_id', '==', pid).get(),
+    adminDb.collection('reviews').where('provider_id', '==', pid).get(),
+    adminDb.collection('service_categories').get(),
+    adminDb.collection('areas').get()
+  ])
 
-  const isOwnProfile = user && provider.user_id === user.id
+  const catsMap = catsSnap.docs.reduce((acc, d) => ({...acc, [d.id]: d.data()}), {})
+  const allAreasMap = allAreasSnap.docs.reduce((acc, d) => ({...acc, [d.id]: d.data()}), {})
+
+  provider.user = userSnap.exists ? userSnap.data() : null
+  
+  provider.provider_services = svcsSnap.docs.map(d => {
+    const s = d.data()
+    return { id: d.id, ...s, category: catsMap[s.category_id] || null }
+  })
+
+  provider.provider_areas = areasSnap.docs.map(d => {
+    const a = d.data()
+    return { area: allAreasMap[a.area_id] || null }
+  })
+
+  provider.provider_portfolio = portfolioSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+  
+  let reviews = reviewsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+  if (reviews.length > 0) {
+    const clientIds = [...new Set(reviews.map(r => r.client_id))]
+    const clientsMap = {}
+    await Promise.all(clientIds.map(async cid => {
+      const c = await adminDb.collection('users').doc(cid).get()
+      if (c.exists) clientsMap[cid] = c.data()
+    }))
+    reviews = reviews.map(r => ({ ...r, client: clientsMap[r.client_id] || null }))
+  }
+  provider.reviews = reviews
+
+  let currentUser = null
+  let currentProfile = null
+  
+  const cookieStore = await cookies()
+  const sessionCookie = cookieStore.get('session')?.value
+  
+  if (sessionCookie) {
+    try {
+      currentUser = await adminAuth.verifySessionCookie(sessionCookie, true)
+      const cpDoc = await adminDb.collection('users').doc(currentUser.uid).get()
+      if (cpDoc.exists) {
+        currentProfile = { id: currentUser.uid, ...cpDoc.data() }
+      }
+    } catch (e) {
+      // invalid session
+    }
+  }
+
+  const isOwnProfile = currentUser && provider.user_id === currentUser.uid
   const rating = provider.average_rating ? Number(provider.average_rating).toFixed(1) : null
-  const reviews = provider.reviews || []
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
@@ -267,22 +310,28 @@ export default async function ProviderProfilePage({ params }) {
 
               {/* Favorite + Contact */}
               <div className="space-y-2">
-                {!isOwnProfile && user && currentProfile?.role === 'client' && (
-                  <FavoriteButton providerId={provider.id} clientId={user.id} />
+                {!isOwnProfile && currentUser && currentProfile?.role === 'client' && (
+                  <FavoriteButton providerId={provider.id} clientId={currentUser.uid} />
                 )}
               </div>
             </CardContent>
           </Card>
 
           {/* Request form */}
-          {!isOwnProfile ? (
-            <RequestForm providerId={provider.id} providerName={provider.business_name} />
-          ) : (
+          {isOwnProfile ? (
             <Card>
               <CardContent className="pt-5 text-center">
                 <p className="text-sm text-muted-foreground">Acesta este profilul tău public</p>
               </CardContent>
             </Card>
+          ) : currentProfile?.role === 'provider' ? (
+            <Card>
+              <CardContent className="pt-5 text-center">
+                <p className="text-sm text-muted-foreground">Trebuie să ai un cont de Client pentru a trimite o cerere.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <RequestForm providerId={provider.id} providerName={provider.business_name} />
           )}
         </div>
       </div>

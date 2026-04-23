@@ -2,7 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { auth, db } from '@/lib/firebase/client'
+import { onAuthStateChanged } from 'firebase/auth'
+import { doc, getDoc, setDoc, collection, getDocs, query, where, orderBy } from 'firebase/firestore'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -22,25 +24,37 @@ export default function OnboardingPage() {
   const [isFetchingProfile, setIsFetchingProfile] = useState(true)
   const [areasList, setAreasList] = useState([])
   const router = useRouter()
-  const supabase = createClient()
-
   useEffect(() => {
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) { router.push('/login'); return }
-      const { data } = await supabase
-        .from('profiles')
-        .select('role, onboarding_completed')
-        .eq('id', user.id)
-        .maybeSingle()
-      if (data?.onboarding_completed) { router.push('/dashboard'); return }
-      if (data?.role) setRole(data.role)
-      setIsFetchingProfile(false)
+      
+      try {
+        const userDoc = await getDoc(doc(db, 'users', user.uid))
+        const data = userDoc.exists() ? userDoc.data() : null
+        
+        if (data?.onboarding_completed) { router.push('/dashboard'); return }
+        if (data?.role) setRole(data.role)
+      } catch (err) {
+        console.error("Eroare fetching profile:", err)
+      } finally {
+        setIsFetchingProfile(false)
+      }
     })
 
     // Fetch locations for select
-    supabase.from('areas').select('id, name, type').eq('is_active', true).order('name').then(({ data }) => {
-      if (data) setAreasList(data)
-    })
+    const fetchAreas = async () => {
+      try {
+        const querySnapshot = await getDocs(collection(db, 'areas'))
+        const areas = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+        areas.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+        setAreasList(areas)
+      } catch (err) {
+        console.error("Eroare fetching areas:", err)
+      }
+    }
+    fetchAreas()
+
+    return () => unsubscribe()
   }, [])
 
   const schema = z.object({
@@ -84,8 +98,13 @@ export default function OnboardingPage() {
 
   const handleRole = async (selectedRole) => {
     setRole(selectedRole)
-    const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('profiles').upsert({ id: user.id, role: selectedRole })
+    const user = auth.currentUser
+    if (user) {
+      await setDoc(doc(db, 'users', user.uid), { 
+        role: selectedRole,
+        updated_at: new Date().toISOString()
+      }, { merge: true })
+    }
   }
 
   const nextStep = async (currentStep) => {
@@ -101,47 +120,49 @@ export default function OnboardingPage() {
 
   const onSubmit = async (data) => {
     setLoading(true)
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = auth.currentUser
 
     try {
       if (role === 'provider') {
         const slug = slugify(data.businessName) + '-' + Math.random().toString(36).slice(2, 6)
         
-        // 1. Inserare profil provider
-        const { error: ppError } = await supabase
-          .from('provider_profiles')
-          .insert({
-            user_id: user.id,
-            provider_type: data.providerType,
-            business_name: data.businessName,
-            slug,
-            cui: data.cui || null,
-            reg_com: data.regCom || null,
-            short_description: data.shortDescription,
-          })
+        // 1. Inserare profil provider in Firestore (folosim user.uid ca ID pentru ușurință)
+        await setDoc(doc(db, 'providers', user.uid), {
+          user_id: user.uid,
+          provider_type: data.providerType,
+          business_name: data.businessName,
+          slug,
+          cui: data.cui || null,
+          reg_com: data.regCom || null,
+          short_description: data.shortDescription,
+          is_active: true,
+          is_verified: false,
+          average_rating: 0,
+          total_reviews: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
 
-        if (ppError) throw ppError
-
-        // 2. Update profil public
-        await supabase.from('profiles').upsert({
-          id: user.id,
+        // 2. Update profil public in users
+        await setDoc(doc(db, 'users', user.uid), {
           phone: data.phone,
           whatsapp_number: data.whatsappNumber || null,
           location_id: data.locationId,
           onboarding_completed: true,
-          role: 'provider'
-        })
+          role: 'provider',
+          updated_at: new Date().toISOString()
+        }, { merge: true })
 
       } else {
         // Client Update
-        await supabase.from('profiles').upsert({
-          id: user.id,
+        await setDoc(doc(db, 'users', user.uid), {
           phone: data.phone || null,
           whatsapp_number: data.whatsappNumber || null,
           location_id: data.locationId,
           onboarding_completed: true,
-          role: 'client'
-        })
+          role: 'client',
+          updated_at: new Date().toISOString()
+        }, { merge: true })
       }
 
       toast.success('Profilul tău a fost creat cu succes!')
@@ -296,7 +317,7 @@ export default function OnboardingPage() {
                     >
                       <option value="">Alege o locație...</option>
                       {areasList.map(area => (
-                        <option key={area.id} value={area.id}>{area.name} ({area.type})</option>
+                        <option key={area.id} value={area.id}>{area.name}</option>
                       ))}
                     </select>
                     {errors.locationId && <p className="text-xs text-destructive">{errors.locationId.message}</p>}

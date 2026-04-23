@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { adminDb } from '@/lib/firebase/server'
 import ProviderCard from '@/components/providers/ProviderCard'
 import SearchFilters from '@/components/providers/SearchFilters'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -11,36 +11,82 @@ export const metadata = {
 }
 
 async function SearchResults({ searchParams }) {
-  const supabase = await createClient()
   const params = await searchParams
   const query = params?.q || ''
   const category = params?.category
   const area = params?.area
 
-  let dbQuery = supabase
-    .from('provider_profiles')
-    .select(`
-      id, business_name, slug, short_description, average_rating, total_reviews,
-      starting_price, is_verified,
-      user:user_id(avatar_url),
-      provider_services(title, category:category_id(name, slug, icon)),
-      provider_areas(area:area_id(name, slug))
-    `)
-    .eq('is_active', true)
+  let providersQuery = adminDb.collection('providers').where('is_active', '==', true)
+  const providersSnap = await providersQuery.get()
+  let providers = providersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
 
+  if (providers.length > 0) {
+    const [usersSnap, svcsSnap, areasSnap, catsSnap, allAreasSnap] = await Promise.all([
+      adminDb.collection('users').get(),
+      adminDb.collection('provider_services').get(),
+      adminDb.collection('provider_areas').get(),
+      adminDb.collection('service_categories').get(),
+      adminDb.collection('areas').get()
+    ])
+
+    const usersMap = usersSnap.docs.reduce((acc, d) => ({...acc, [d.id]: d.data()}), {})
+    const catsMap = catsSnap.docs.reduce((acc, d) => ({...acc, [d.id]: d.data()}), {})
+    const areasMap = allAreasSnap.docs.reduce((acc, d) => ({...acc, [d.id]: d.data()}), {})
+
+    // group services by provider
+    const servicesByProvider = {}
+    svcsSnap.docs.forEach(d => {
+      const s = d.data()
+      if (!servicesByProvider[s.provider_id]) servicesByProvider[s.provider_id] = []
+      servicesByProvider[s.provider_id].push({ title: s.title, category: catsMap[s.category_id] || null })
+    })
+
+    // group areas by provider
+    const areasByProvider = {}
+    areasSnap.docs.forEach(d => {
+      const a = d.data()
+      if (!areasByProvider[a.provider_id]) areasByProvider[a.provider_id] = []
+      areasByProvider[a.provider_id].push({ area: areasMap[a.area_id] || null })
+    })
+
+    providers = providers.map(p => ({
+      ...p,
+      user: usersMap[p.id] || null,
+      provider_services: servicesByProvider[p.id] || [],
+      provider_areas: areasByProvider[p.id] || []
+    }))
+  }
+
+  // Client-side filtering because Firestore doesn't support ILIKE
   if (query) {
-    dbQuery = dbQuery.or(
-      `business_name.ilike.%${query}%,short_description.ilike.%${query}%`
+    const q = query.toLowerCase()
+    providers = providers.filter(p => 
+      (p.business_name && p.business_name.toLowerCase().includes(q)) ||
+      (p.short_description && p.short_description.toLowerCase().includes(q))
+    )
+  }
+
+  // category filter logic (if it exists)
+  if (category) {
+    providers = providers.filter(p => 
+      p.provider_services.some(s => s.category?.slug === category)
+    )
+  }
+
+  // area filter logic (if it exists)
+  if (area) {
+    providers = providers.filter(p => 
+      p.provider_areas.some(a => a.area?.slug === area)
     )
   }
 
   if (params?.sort === 'rating') {
-    dbQuery = dbQuery.order('average_rating', { ascending: false })
+    providers.sort((a, b) => (b.average_rating || 0) - (a.average_rating || 0))
   } else {
-    dbQuery = dbQuery.order('created_at', { ascending: false })
+    providers.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
   }
 
-  const { data: providers } = await dbQuery.limit(24)
+  providers = providers.slice(0, 24)
 
   return (
     <>

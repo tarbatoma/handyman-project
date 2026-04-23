@@ -1,19 +1,27 @@
-import { createClient } from '@/lib/supabase/server'
+import { cookies } from 'next/headers'
+import { adminAuth, adminDb } from '@/lib/firebase/server'
 import { redirect } from 'next/navigation'
 import DashboardSidebar from '@/components/layout/DashboardSidebar'
 import Navbar from '@/components/layout/Navbar'
 
 export default async function PrivateLayout({ children }) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const cookieStore = await cookies()
+  const sessionCookie = cookieStore.get('session')?.value
 
-  if (!user) redirect('/login')
+  if (!sessionCookie) redirect('/login')
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role, full_name, onboarding_completed')
-    .eq('id', user.id)
-    .maybeSingle()
+  let profile = null
+  let user = null
+
+  try {
+    const decodedClaims = await adminAuth.verifySessionCookie(sessionCookie, true)
+    user = decodedClaims
+    
+    const userDoc = await adminDb.collection('users').doc(user.uid).get()
+    profile = userDoc.data()
+  } catch (error) {
+    redirect('/login')
+  }
 
   // Redirecționare la onboarding dacă nu e completat sau nu există profil
   if (!profile || !profile.onboarding_completed) {

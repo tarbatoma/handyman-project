@@ -6,7 +6,9 @@ import Link from 'next/link'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { createClient } from '@/lib/supabase/client'
+import { signInWithEmailAndPassword } from 'firebase/auth'
+import { auth } from '@/lib/firebase/client'
+import { createSession } from '@/actions/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -25,7 +27,7 @@ function LoginFormInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const redirectTo = searchParams.get('redirectTo') || '/dashboard'
-  const supabase = createClient()
+
 
   const { register, handleSubmit, formState: { errors } } = useForm({
     resolver: zodResolver(loginSchema),
@@ -33,12 +35,20 @@ function LoginFormInner() {
 
   const onSubmit = async (data) => {
     setLoading(true)
-    const { error } = await supabase.auth.signInWithPassword({
-      email: data.email,
-      password: data.password,
-    })
-
-    if (error) {
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, data.email, data.password)
+      const idToken = await userCredential.user.getIdToken()
+      
+      // Setăm cookie-ul de sesiune pe server
+      const result = await createSession(idToken)
+      
+      if (result?.error) {
+        toast.error('Eroare la crearea sesiunii')
+        setLoading(false)
+        return
+      }
+    } catch (error) {
+      console.error(error)
       toast.error('Email sau parolă greșite')
       setLoading(false)
       return

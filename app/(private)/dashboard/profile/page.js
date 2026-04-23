@@ -1,7 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { auth, db, storage } from '@/lib/firebase/client'
+import { onAuthStateChanged } from 'firebase/auth'
+import { doc, getDoc, updateDoc } from 'firebase/firestore'
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -27,28 +30,24 @@ export default function ProfilePage() {
   const [avatarFile, setAvatarFile] = useState(null)
   const [avatarPreview, setAvatarPreview] = useState(null)
   const router = useRouter()
-  const supabase = createClient()
+
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm({
     resolver: zodResolver(profileSchema),
   })
 
   useEffect(() => {
-    const load = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) return
-      const { data } = await supabase
-        .from('profiles')
-        .select('full_name, phone, avatar_url, role')
-        .eq('id', user.id)
-        .single()
-      if (data) {
-        setProfile({ ...data, id: user.id })
+      const userDoc = await getDoc(doc(db, 'users', user.uid))
+      if (userDoc.exists()) {
+        const data = userDoc.data()
+        setProfile({ ...data, id: user.uid })
         reset({ full_name: data.full_name || '', phone: data.phone || '' })
       }
-    }
-    load()
-  }, [])
+    })
+    return () => unsubscribe()
+  }, [reset])
 
   const handleAvatarChange = (e) => {
     const file = e.target.files?.[0]
@@ -62,31 +61,31 @@ export default function ProfilePage() {
     setLoading(true)
     let avatarUrl = profile?.avatar_url
 
-    if (avatarFile) {
-      const ext = avatarFile.name.split('.').pop()
-      const filename = `${profile.id}.${ext}`
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(filename, avatarFile, { upsert: true })
-
-      if (!uploadError) {
-        const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(filename)
-        avatarUrl = urlData.publicUrl
+    try {
+      if (avatarFile) {
+        const ext = avatarFile.name.split('.').pop()
+        const filename = `avatars/${profile.id}.${ext}`
+        const storageRef = ref(storage, filename)
+        
+        await uploadBytes(storageRef, avatarFile)
+        avatarUrl = await getDownloadURL(storageRef)
       }
-    }
 
-    const { error } = await supabase
-      .from('profiles')
-      .update({ full_name: data.full_name, phone: data.phone, avatar_url: avatarUrl })
-      .eq('id', profile.id)
+      await updateDoc(doc(db, 'users', profile.id), {
+        full_name: data.full_name,
+        phone: data.phone,
+        avatar_url: avatarUrl,
+        updated_at: new Date().toISOString()
+      })
 
-    if (error) {
-      toast.error('Eroare la salvare')
-    } else {
       toast.success('Profilul tău a fost actualizat!')
       router.refresh()
+    } catch (error) {
+      console.error(error)
+      toast.error('Eroare la salvare')
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   return (

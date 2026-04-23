@@ -1,9 +1,11 @@
-import { createClient } from '@/lib/supabase/server'
+import { cookies } from 'next/headers'
+import { adminAuth, adminDb } from '@/lib/firebase/server'
 import { redirect } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { formatDate } from '@/lib/utils'
 import { MessageSquare } from 'lucide-react'
+import ReviewAction from '@/components/dashboard/ReviewAction'
 
 export const metadata = { title: 'Cererile mele' }
 
@@ -22,19 +24,49 @@ const statusLabels = {
 }
 
 export default async function ClientRequestsPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const cookieStore = await cookies()
+  const sessionCookie = cookieStore.get('session')?.value
+  if (!sessionCookie) redirect('/login')
 
-  const { data: requests } = await supabase
-    .from('requests')
-    .select(`
-      id, title, description, status, budget, created_at,
-      provider:provider_id(business_name, slug),
-      area:area_id(name)
-    `)
-    .eq('client_id', user.id)
-    .order('created_at', { ascending: false })
+  let user = null
+  try {
+    user = await adminAuth.verifySessionCookie(sessionCookie, true)
+  } catch (error) {
+    redirect('/login')
+  }
+
+  const requestsSnap = await adminDb.collection('requests')
+    .where('client_id', '==', user.uid)
+    .get()
+    
+  let requests = requestsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+  requests.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+
+  const reviewsSnap = await adminDb.collection('reviews')
+    .where('client_id', '==', user.uid)
+    .get()
+  const reviewedRequestIds = new Set(reviewsSnap.docs.map(doc => doc.data().request_id))
+
+  if (requests.length > 0) {
+    const providerIds = [...new Set(requests.map(r => r.provider_id).filter(Boolean))]
+    const providersMap = {}
+    
+    if (providerIds.length > 0) {
+      await Promise.all(providerIds.map(async id => {
+        const p = await adminDb.collection('providers').doc(id).get()
+        if (p.exists) providersMap[id] = p.data()
+      }))
+    }
+    
+    const areasSnap = await adminDb.collection('areas').get()
+    const areasMap = areasSnap.docs.reduce((acc, doc) => ({...acc, [doc.id]: doc.data()}), {})
+    
+    requests = requests.map(req => ({
+      ...req,
+      provider: providersMap[req.provider_id] || null,
+      area: areasMap[req.area_id] || null
+    }))
+  }
 
   return (
     <div className="space-y-6">
@@ -76,6 +108,14 @@ export default async function ClientRequestsPage() {
                     </div>
                   </div>
                 </div>
+                {req.status === 'completed' && req.provider_id && (
+                  <ReviewAction 
+                    providerId={req.provider_id} 
+                    clientId={user.uid} 
+                    requestId={req.id} 
+                    isReviewed={reviewedRequestIds.has(req.id)}
+                  />
+                )}
               </CardContent>
             </Card>
           ))}

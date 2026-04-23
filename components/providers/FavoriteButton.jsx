@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { db } from '@/lib/firebase/client'
+import { collection, query, where, getDocs, addDoc, deleteDoc, doc } from 'firebase/firestore'
 import { Button } from '@/components/ui/button'
 import { Heart } from 'lucide-react'
 import { toast } from 'sonner'
@@ -10,32 +11,37 @@ import { cn } from '@/lib/utils'
 export default function FavoriteButton({ providerId, clientId }) {
   const [isFav, setIsFav] = useState(false)
   const [loading, setLoading] = useState(false)
-  const supabase = createClient()
+  const [favDocId, setFavDocId] = useState(null)
 
   useEffect(() => {
-    supabase
-      .from('favorites')
-      .select('id')
-      .eq('client_id', clientId)
-      .eq('provider_id', providerId)
-      .maybeSingle()
-      .then(({ data }) => setIsFav(!!data))
+    const load = async () => {
+      const q = query(collection(db, 'favorites'), where('client_id', '==', clientId), where('provider_id', '==', providerId))
+      const snap = await getDocs(q)
+      if (!snap.empty) {
+        setIsFav(true)
+        setFavDocId(snap.docs[0].id)
+      }
+    }
+    load()
   }, [clientId, providerId])
 
   const toggle = async () => {
     setLoading(true)
-    if (isFav) {
-      await supabase
-        .from('favorites')
-        .delete()
-        .eq('client_id', clientId)
-        .eq('provider_id', providerId)
-      setIsFav(false)
-      toast.success('Eliminat din favorite')
-    } else {
-      await supabase.from('favorites').insert({ client_id: clientId, provider_id: providerId })
-      setIsFav(true)
-      toast.success('Adăugat la favorite!')
+    try {
+      if (isFav && favDocId) {
+        await deleteDoc(doc(db, 'favorites', favDocId))
+        setIsFav(false)
+        setFavDocId(null)
+        toast.success('Eliminat din favorite')
+      } else {
+        const dbRef = await addDoc(collection(db, 'favorites'), { client_id: clientId, provider_id: providerId, created_at: new Date().toISOString() })
+        setIsFav(true)
+        setFavDocId(dbRef.id)
+        toast.success('Adăugat la favorite!')
+      }
+    } catch (err) {
+      console.error(err)
+      toast.error('A apărut o eroare')
     }
     setLoading(false)
   }

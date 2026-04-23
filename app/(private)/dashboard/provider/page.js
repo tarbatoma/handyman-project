@@ -1,4 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
+import { cookies } from 'next/headers'
+import { adminAuth, adminDb } from '@/lib/firebase/server'
 import { redirect } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -9,36 +10,43 @@ import { MessageSquare, Star, Briefcase, MapPin, Image, TrendingUp, ArrowRight }
 export const metadata = { title: 'Dashboard Prestator' }
 
 export default async function ProviderDashboardPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const cookieStore = await cookies()
+  const sessionCookie = cookieStore.get('session')?.value
+  if (!sessionCookie) redirect('/login')
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role, full_name')
-    .eq('id', user.id)
-    .single()
+  let user = null
+  try {
+    user = await adminAuth.verifySessionCookie(sessionCookie, true)
+  } catch (error) {
+    redirect('/login')
+  }
+
+  const userDoc = await adminDb.collection('users').doc(user.uid).get()
+  const profile = userDoc.data()
 
   if (profile?.role !== 'provider') redirect('/dashboard/client')
 
-  const { data: providerProfile } = await supabase
-    .from('provider_profiles')
-    .select(`
-      id, business_name, slug, average_rating, total_reviews, is_active,
-      provider_services(count),
-      provider_areas(count)
-    `)
-    .eq('user_id', user.id)
-    .single()
+  const providerDoc = await adminDb.collection('providers').doc(user.uid).get()
+  let providerProfile = providerDoc.exists ? providerDoc.data() : null
 
   let requestStats = { total: 0, new: 0 }
+  let servicesCount = 0
+  let areasCount = 0
+
   if (providerProfile) {
-    const { data: requests } = await supabase
-      .from('requests')
-      .select('status')
-      .eq('provider_id', providerProfile.id)
-    requestStats.total = requests?.length || 0
-    requestStats.new = requests?.filter((r) => r.status === 'new').length || 0
+    // Counts
+    const [servicesSnap, areasSnap, requestsSnap] = await Promise.all([
+      adminDb.collection('provider_services').where('provider_id', '==', user.uid).count().get(),
+      adminDb.collection('provider_areas').where('provider_id', '==', user.uid).count().get(),
+      adminDb.collection('requests').where('provider_id', '==', user.uid).get()
+    ])
+
+    servicesCount = servicesSnap.data().count
+    areasCount = areasSnap.data().count
+    
+    const requests = requestsSnap.docs.map(d => d.data())
+    requestStats.total = requests.length
+    requestStats.new = requests.filter(r => r.status === 'new').length
   }
 
   const stats = [
@@ -53,7 +61,7 @@ export default async function ProviderDashboardPage() {
     },
     {
       title: 'Servicii active',
-      value: providerProfile?.provider_services?.[0]?.count || 0,
+      value: servicesCount,
       sub: 'servicii listate',
       icon: Briefcase,
       href: '/dashboard/provider/services',
@@ -73,7 +81,7 @@ export default async function ProviderDashboardPage() {
     },
     {
       title: 'Zone acoperite',
-      value: providerProfile?.provider_areas?.[0]?.count || 0,
+      value: areasCount,
       sub: 'sectoare',
       icon: MapPin,
       href: '/dashboard/provider/areas',
@@ -180,7 +188,7 @@ export default async function ProviderDashboardPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">Servicii</span>
                   <span className="text-sm font-medium">
-                    {providerProfile.provider_services?.[0]?.count || 0} listare(i)
+                    {servicesCount} listare(i)
                   </span>
                 </div>
               </>

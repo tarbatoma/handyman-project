@@ -1,43 +1,41 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { auth, db } from '@/lib/firebase/client'
+import { onAuthStateChanged } from 'firebase/auth'
+import { collection, query, where, getDocs, doc, writeBatch, orderBy } from 'firebase/firestore'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { MapPin, Check, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { SECTORS } from '@/lib/constants'
 
 export default function ProviderAreasPage() {
   const [areas, setAreas] = useState([])
   const [selectedAreas, setSelectedAreas] = useState([])
   const [providerId, setProviderId] = useState(null)
   const [loading, setLoading] = useState(false)
-  const supabase = createClient()
-
   useEffect(() => {
-    const load = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) return
+      setProviderId(user.uid)
 
-      const [{ data: pp }, { data: allAreas }] = await Promise.all([
-        supabase.from('provider_profiles').select('id').eq('user_id', user.id).single(),
-        supabase.from('areas').select('id, name, slug').order('name'),
-      ])
+      try {
+        const [areasSnap, providerAreasSnap] = await Promise.all([
+          getDocs(query(collection(db, 'areas'), orderBy('name'))),
+          getDocs(query(collection(db, 'provider_areas'), where('provider_id', '==', user.uid)))
+        ])
 
-      if (!pp) return
-      setProviderId(pp.id)
-      setAreas(allAreas || [])
+        const allAreas = areasSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        setAreas(allAreas)
 
-      const { data: providerAreas } = await supabase
-        .from('provider_areas')
-        .select('area_id')
-        .eq('provider_id', pp.id)
-
-      setSelectedAreas(providerAreas?.map((a) => a.area_id) || [])
-    }
-    load()
+        const selected = providerAreasSnap.docs.map(d => d.data().area_id)
+        setSelectedAreas(selected)
+      } catch (error) {
+        console.error(error)
+      }
+    })
+    return () => unsubscribe()
   }, [])
 
   const toggle = (areaId) => {
@@ -48,16 +46,24 @@ export default function ProviderAreasPage() {
 
   const save = async () => {
     setLoading(true)
-    // Șterge toate și reinserează
-    await supabase.from('provider_areas').delete().eq('provider_id', providerId)
+    try {
+      const batch = writeBatch(db)
+      
+      const q = query(collection(db, 'provider_areas'), where('provider_id', '==', providerId))
+      const snapshot = await getDocs(q)
+      snapshot.forEach(d => batch.delete(d.ref))
 
-    if (selectedAreas.length > 0) {
-      await supabase.from('provider_areas').insert(
-        selectedAreas.map((areaId) => ({ provider_id: providerId, area_id: areaId }))
-      )
+      selectedAreas.forEach(areaId => {
+        const newDocRef = doc(collection(db, 'provider_areas'))
+        batch.set(newDocRef, { provider_id: providerId, area_id: areaId })
+      })
+
+      await batch.commit()
+      toast.success('Zonele de activitate au fost salvate!')
+    } catch (error) {
+      console.error(error)
+      toast.error('Eroare la salvare')
     }
-
-    toast.success('Zonele de activitate au fost salvate!')
     setLoading(false)
   }
 

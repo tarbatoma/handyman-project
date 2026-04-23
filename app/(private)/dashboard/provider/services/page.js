@@ -1,7 +1,9 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { auth, db } from '@/lib/firebase/client'
+import { onAuthStateChanged } from 'firebase/auth'
+import { collection, query, where, getDocs, addDoc, deleteDoc, doc, orderBy } from 'firebase/firestore'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -31,71 +33,87 @@ export default function ProviderServicesPage() {
   const [loading, setLoading] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const router = useRouter()
-  const supabase = createClient()
+
 
   const { register, handleSubmit, setValue, reset, formState: { errors } } = useForm({
     resolver: zodResolver(serviceSchema),
   })
 
   useEffect(() => {
-    const load = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) return
+      setProviderId(user.uid)
 
-      const { data: pp } = await supabase
-        .from('provider_profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .single()
+      try {
+        const [svcsSnap, catsSnap] = await Promise.all([
+          getDocs(query(collection(db, 'provider_services'), where('provider_id', '==', user.uid))),
+          getDocs(query(collection(db, 'service_categories'), orderBy('sort_order')))
+        ])
 
-      if (!pp) return
-      setProviderId(pp.id)
+        const cats = catsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        const catsMap = cats.reduce((acc, c) => ({ ...acc, [c.id]: c }), {})
 
-      const [{ data: svcs }, { data: cats }] = await Promise.all([
-        supabase.from('provider_services')
-          .select('id, title, description, price_from, price_unit, category:category_id(name, slug, icon)')
-          .eq('provider_id', pp.id)
-          .order('created_at'),
-        supabase.from('service_categories').select('id, name, slug, icon').order('sort_order'),
-      ])
+        const svcs = svcsSnap.docs.map(d => {
+          const data = d.data()
+          return {
+            id: d.id,
+            ...data,
+            category: catsMap[data.category_id] || null
+          }
+        }).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
 
-      setServices(svcs || [])
-      setCategories(cats || [])
-    }
-    load()
+        setCategories(cats)
+        setServices(svcs)
+      } catch (err) {
+        console.error(err)
+      }
+    })
+    return () => unsubscribe()
   }, [])
 
   const onAdd = async (data) => {
     setLoading(true)
-    const { error } = await supabase.from('provider_services').insert({
-      provider_id: providerId,
-      category_id: data.category_id,
-      title: data.title,
-      description: data.description || null,
-      price_from: data.price_from || null,
-      price_unit: data.price_unit || 'proiect',
-    })
+    try {
+      const newSvcData = {
+        provider_id: providerId,
+        category_id: data.category_id,
+        title: data.title,
+        description: data.description || null,
+        price_from: data.price_from || null,
+        price_unit: data.price_unit || 'proiect',
+        created_at: new Date().toISOString()
+      }
+      
+      const docRef = await addDoc(collection(db, 'provider_services'), newSvcData)
+      
+      const cat = categories.find(c => c.id === data.category_id)
+      
+      setServices(prev => [{
+        id: docRef.id,
+        ...newSvcData,
+        category: cat
+      }, ...prev])
 
-    if (error) {
-      toast.error('Eroare la adăugare')
-    } else {
       toast.success('Serviciu adăugat!')
       reset()
       setShowForm(false)
       router.refresh()
-      // Reload services
-      const { data: svcs } = await supabase.from('provider_services')
-        .select('id, title, description, price_from, price_unit, category:category_id(name, slug, icon)')
-        .eq('provider_id', providerId).order('created_at')
-      setServices(svcs || [])
+    } catch (error) {
+      console.error(error)
+      toast.error('Eroare la adăugare')
     }
     setLoading(false)
   }
 
   const onDelete = async (id) => {
-    await supabase.from('provider_services').delete().eq('id', id)
-    setServices((prev) => prev.filter((s) => s.id !== id))
-    toast.success('Serviciu șters')
+    try {
+      await deleteDoc(doc(db, 'provider_services', id))
+      setServices((prev) => prev.filter((s) => s.id !== id))
+      toast.success('Serviciu șters')
+    } catch (error) {
+      console.error(error)
+      toast.error('Eroare la ștergere')
+    }
   }
 
   return (

@@ -5,7 +5,9 @@ import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { createClient } from '@/lib/supabase/client'
+import { auth, db } from '@/lib/firebase/client'
+import { onAuthStateChanged } from 'firebase/auth'
+import { collection, getDocs, addDoc } from 'firebase/firestore'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -29,11 +31,14 @@ export default function RequestForm({ providerId, providerName }) {
   const [user, setUser] = useState(null)
   const [areas, setAreas] = useState([])
   const router = useRouter()
-  const supabase = createClient()
-
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => setUser(user))
-    supabase.from('areas').select('id, name, slug').then(({ data }) => setAreas(data || []))
+    const unsubscribe = onAuthStateChanged(auth, (u) => setUser(u))
+    const loadAreas = async () => {
+      const snap = await getDocs(collection(db, 'areas'))
+      setAreas(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    }
+    loadAreas()
+    return () => unsubscribe()
   }, [])
 
   const { register, handleSubmit, setValue, formState: { errors } } = useForm({
@@ -50,23 +55,23 @@ export default function RequestForm({ providerId, providerName }) {
     setLoading(true)
     const area = areas.find((a) => a.slug === data.area_slug)
 
-    const { error } = await supabase.from('requests').insert({
-      client_id: user.id,
-      provider_id: providerId,
-      title: data.title,
-      description: data.description,
-      area_id: area?.id || null,
-      budget: data.budget || null,
-      client_phone: data.client_phone || null,
-    })
-
-    if (error) {
+    try {
+      await addDoc(collection(db, 'requests'), {
+        client_id: user.uid,
+        provider_id: providerId,
+        title: data.title,
+        description: data.description,
+        area_id: area?.id || null,
+        budget: data.budget || null,
+        client_phone: data.client_phone || null,
+        status: 'new',
+        created_at: new Date().toISOString()
+      })
+      toast.success('Cererea a fost trimisă cu succes! Prestatorul te va contacta în curând.')
+    } catch (error) {
+      console.error(error)
       toast.error('Eroare la trimiterea cererii')
-      setLoading(false)
-      return
     }
-
-    toast.success('Cererea a fost trimisă cu succes! Prestatorul te va contacta în curând.')
     setLoading(false)
   }
 

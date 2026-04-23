@@ -1,4 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
+import { cookies } from 'next/headers'
+import { adminAuth, adminDb } from '@/lib/firebase/server'
 import { redirect } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -9,27 +10,29 @@ import { MessageSquare, Heart, Star, Search } from 'lucide-react'
 export const metadata = { title: 'Dashboard Client' }
 
 export default async function ClientDashboardPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const cookieStore = await cookies()
+  const sessionCookie = cookieStore.get('session')?.value
+  if (!sessionCookie) redirect('/login')
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role, full_name')
-    .eq('id', user.id)
-    .single()
+  let user = null
+  try {
+    user = await adminAuth.verifySessionCookie(sessionCookie, true)
+  } catch (error) {
+    redirect('/login')
+  }
+
+  const userDoc = await adminDb.collection('users').doc(user.uid).get()
+  const profile = userDoc.data()
 
   if (profile?.role === 'provider') redirect('/dashboard/provider')
 
-  const { data: requests } = await supabase
-    .from('requests')
-    .select('status')
-    .eq('client_id', user.id)
+  const [requestsSnap, favoritesSnap] = await Promise.all([
+    adminDb.collection('requests').where('client_id', '==', user.uid).get(),
+    adminDb.collection('favorites').where('client_id', '==', user.uid).get()
+  ])
 
-  const { data: favorites } = await supabase
-    .from('favorites')
-    .select('id')
-    .eq('client_id', user.id)
+  const requests = requestsSnap.docs.map(doc => doc.data())
+  const favorites = favoritesSnap.docs.map(doc => doc.data())
 
   const stats = [
     {

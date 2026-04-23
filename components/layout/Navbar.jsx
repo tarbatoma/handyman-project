@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter, usePathname } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { auth } from '@/lib/firebase/client'
+import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { removeSession } from '@/actions/auth'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -24,28 +26,18 @@ export default function Navbar() {
   const [scrolled, setScrolled] = useState(false)
   const router = useRouter()
   const pathname = usePathname()
-  const supabase = createClient()
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setUser(user)
-      if (user) {
-        supabase
-          .from('profiles')
-          .select('full_name, avatar_url, role')
-          .eq('id', user.id)
-          .single()
-          .then(({ data }) => setProfile(data))
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser)
+      if (currentUser) {
+        // TODO: Firestore fetch profile
+        setProfile({ full_name: currentUser.displayName || currentUser.email })
+      } else {
+        setProfile(null)
       }
     })
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_, session) => {
-        setUser(session?.user ?? null)
-        if (!session?.user) setProfile(null)
-      }
-    )
-    return () => subscription.unsubscribe()
+    return () => unsubscribe()
   }, [])
 
   useEffect(() => {
@@ -55,7 +47,8 @@ export default function Navbar() {
   }, [])
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut()
+    await signOut(auth)
+    await removeSession()
     toast.success('Ai fost deconectat')
     router.push('/')
     router.refresh()

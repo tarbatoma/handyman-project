@@ -1,4 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
+import { cookies } from 'next/headers'
+import { adminAuth, adminDb } from '@/lib/firebase/server'
 import { redirect } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -23,27 +24,50 @@ const statusLabels = {
 }
 
 export default async function ProviderRequestsPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const cookieStore = await cookies()
+  const sessionCookie = cookieStore.get('session')?.value
+  if (!sessionCookie) redirect('/login')
 
-  const { data: providerProfile } = await supabase
-    .from('provider_profiles')
-    .select('id')
-    .eq('user_id', user.id)
-    .single()
+  let user = null
+  try {
+    user = await adminAuth.verifySessionCookie(sessionCookie, true)
+  } catch (error) {
+    redirect('/login')
+  }
 
-  if (!providerProfile) redirect('/dashboard/provider')
+  const providerDoc = await adminDb.collection('providers').doc(user.uid).get()
+  if (!providerDoc.exists) redirect('/dashboard/provider')
 
-  const { data: requests } = await supabase
-    .from('requests')
-    .select(`
-      id, title, description, status, budget, client_phone, created_at,
-      client:client_id(full_name, phone, avatar_url),
-      area:area_id(name)
-    `)
-    .eq('provider_id', providerProfile.id)
-    .order('created_at', { ascending: false })
+  const requestsSnap = await adminDb.collection('requests')
+    .where('provider_id', '==', user.uid)
+    .get()
+    
+  let requests = requestsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+  requests.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+
+  // Fetch client details manually
+  if (requests.length > 0) {
+    const clientIds = [...new Set(requests.map(r => r.client_id).filter(Boolean))]
+    const clientsMap = {}
+    
+    if (clientIds.length > 0) {
+      // Create batches of 10 for 'in' query if needed, or just fetch individually since it's admin
+      await Promise.all(clientIds.map(async id => {
+        const c = await adminDb.collection('users').doc(id).get()
+        if (c.exists) clientsMap[id] = c.data()
+      }))
+    }
+    
+    // Fetch areas
+    const areasSnap = await adminDb.collection('areas').get()
+    const areasMap = areasSnap.docs.reduce((acc, doc) => ({...acc, [doc.id]: doc.data()}), {})
+    
+    requests = requests.map(req => ({
+      ...req,
+      client: clientsMap[req.client_id] || null,
+      area: areasMap[req.area_id] || null
+    }))
+  }
 
   return (
     <div className="space-y-6">

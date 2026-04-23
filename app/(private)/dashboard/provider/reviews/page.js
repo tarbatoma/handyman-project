@@ -1,4 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
+import { cookies } from 'next/headers'
+import { adminAuth, adminDb } from '@/lib/firebase/server'
 import { redirect } from 'next/navigation'
 import { Star } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
@@ -8,23 +9,45 @@ import { getInitials, formatDate } from '@/lib/utils'
 export const metadata = { title: 'Recenziile mele' }
 
 export default async function ProviderReviewsPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const cookieStore = await cookies()
+  const sessionCookie = cookieStore.get('session')?.value
+  if (!sessionCookie) redirect('/login')
 
-  const { data: providerProfile } = await supabase
-    .from('provider_profiles')
-    .select('id, average_rating, total_reviews')
-    .eq('user_id', user.id)
-    .single()
+  let user = null
+  try {
+    user = await adminAuth.verifySessionCookie(sessionCookie, true)
+  } catch (error) {
+    redirect('/login')
+  }
+
+  const providerDoc = await adminDb.collection('providers').doc(user.uid).get()
+  const providerProfile = providerDoc.exists ? providerDoc.data() : null
 
   if (!providerProfile) redirect('/dashboard/provider')
 
-  const { data: reviews } = await supabase
-    .from('reviews')
-    .select('id, rating, comment, created_at, client:client_id(full_name, avatar_url)')
-    .eq('provider_id', providerProfile.id)
-    .order('created_at', { ascending: false })
+  const reviewsSnap = await adminDb.collection('reviews')
+    .where('provider_id', '==', user.uid)
+    .get()
+    
+  let reviews = reviewsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+  reviews.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+
+  if (reviews.length > 0) {
+    const clientIds = [...new Set(reviews.map(r => r.client_id).filter(Boolean))]
+    const clientsMap = {}
+    
+    if (clientIds.length > 0) {
+      await Promise.all(clientIds.map(async id => {
+        const c = await adminDb.collection('users').doc(id).get()
+        if (c.exists) clientsMap[id] = c.data()
+      }))
+    }
+    
+    reviews = reviews.map(rev => ({
+      ...rev,
+      client: clientsMap[rev.client_id] || null
+    }))
+  }
 
   return (
     <div className="space-y-6">

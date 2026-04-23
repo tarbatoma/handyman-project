@@ -1,7 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { auth } from '@/lib/firebase/client'
+import { signOut, sendPasswordResetEmail } from 'firebase/auth'
+import { removeSession } from '@/actions/auth'
 import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -12,10 +14,9 @@ import { LogOut, Trash2, Shield } from 'lucide-react'
 export default function SettingsPage() {
   const [loading, setLoading] = useState(false)
   const router = useRouter()
-  const supabase = createClient()
-
   const handleSignOut = async () => {
-    await supabase.auth.signOut()
+    await signOut(auth)
+    await removeSession()
     toast.success('Ai fost deconectat')
     router.push('/')
     router.refresh()
@@ -40,9 +41,13 @@ export default function SettingsPage() {
               variant="outline"
               size="sm"
               onClick={async () => {
-                const { data: { user } } = await supabase.auth.getUser()
-                await supabase.auth.resetPasswordForEmail(user.email)
-                toast.success('Email de resetare trimis!')
+                const user = auth.currentUser
+                if (user && user.email) {
+                  await sendPasswordResetEmail(auth, user.email)
+                  toast.success('Email de resetare trimis!')
+                } else {
+                  toast.error('Nu s-a putut trimite emailul')
+                }
               }}
             >
               Resetează parola

@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { sendPasswordResetEmail } from 'firebase/auth'
+import { auth } from '@/lib/firebase/client'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -20,7 +21,7 @@ const schema = z.object({
 export default function ResetPasswordForm() {
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
-  const supabase = createClient()
+
 
   const { register, handleSubmit, formState: { errors } } = useForm({
     resolver: zodResolver(schema),
@@ -28,16 +29,15 @@ export default function ResetPasswordForm() {
 
   const onSubmit = async (data) => {
     setLoading(true)
-    const { error } = await supabase.auth.resetPasswordForEmail(data.email, {
-      redirectTo: `${window.location.origin}/dashboard/settings`,
-    })
-
-    if (error) {
-      toast.error('Eroare la trimiterea emailului')
-    } else {
+    try {
+      await sendPasswordResetEmail(auth, data.email)
       setSent(true)
+    } catch (error) {
+      console.error(error)
+      toast.error('Eroare la trimiterea emailului')
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   if (sent) {

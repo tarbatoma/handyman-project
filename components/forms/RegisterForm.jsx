@@ -6,7 +6,10 @@ import Link from 'next/link'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { createClient } from '@/lib/supabase/client'
+import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth'
+import { auth, db } from '@/lib/firebase/client'
+import { doc, setDoc } from 'firebase/firestore'
+import { createSession } from '@/actions/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -33,7 +36,7 @@ function RegisterFormInner() {
   const [selectedType, setSelectedType] = useState('client')
   const router = useRouter()
   const searchParams = useSearchParams()
-  const supabase = createClient()
+
 
   // Preselect type from URL (?type=provider)
   useState(() => {
@@ -48,35 +51,33 @@ function RegisterFormInner() {
 
   const onSubmit = async (data) => {
     setLoading(true)
-    const { data: authData, error } = await supabase.auth.signUp({
-      email: data.email,
-      password: data.password,
-      options: {
-        data: { full_name: data.fullName, role: selectedType },
-      },
-    })
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, data.email, data.password)
+      await updateProfile(userCredential.user, { displayName: data.fullName })
+      
+      const idToken = await userCredential.user.getIdToken()
+      const result = await createSession(idToken)
 
-    if (error) {
+      if (result?.error) {
+        toast.error('Eroare la crearea sesiunii')
+        setLoading(false)
+        return
+      }
+
+      // Firestore - salvarea profilului cu rolul
+      await setDoc(doc(db, 'users', userCredential.user.uid), {
+        full_name: data.fullName,
+        email: data.email,
+        role: selectedType,
+        onboarding_completed: false,
+        created_at: new Date().toISOString()
+      })
+
+    } catch (error) {
+      console.error(error)
       toast.error(error.message || 'Eroare la înregistrare')
       setLoading(false)
       return
-    }
-
-    // Dacă Supabase necesită confirmare pe email, session va fi null
-    if (authData?.user && !authData?.session) {
-      setRegisteredEmail(data.email)
-      setSubmitted(true)
-      setLoading(false)
-      return
-    }
-
-    // Update role in profiles table dacă sesiunea există deja (ex: email confirm dezactivat)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (user) {
-      await supabase
-        .from('profiles')
-        .update({ role: selectedType, full_name: data.fullName })
-        .eq('id', user.id)
     }
 
     toast.success('Cont creat cu succes!')

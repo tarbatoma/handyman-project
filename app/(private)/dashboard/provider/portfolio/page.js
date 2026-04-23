@@ -1,7 +1,10 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { auth, db, storage } from '@/lib/firebase/client'
+import { onAuthStateChanged } from 'firebase/auth'
+import { collection, query, where, getDocs, addDoc, deleteDoc, doc, orderBy } from 'firebase/firestore'
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,21 +17,24 @@ export default function PortfolioPage() {
   const [providerId, setProviderId] = useState(null)
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef()
-  const supabase = createClient()
+
 
   useEffect(() => {
-    const load = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) return
-      const { data: pp } = await supabase
-        .from('provider_profiles').select('id').eq('user_id', user.id).single()
-      if (!pp) return
-      setProviderId(pp.id)
-      const { data } = await supabase
-        .from('provider_portfolio').select('id, image_url, caption').eq('provider_id', pp.id).order('sort_order')
-      setPortfolio(data || [])
-    }
-    load()
+      setProviderId(user.uid)
+
+      try {
+        const q = query(collection(db, 'provider_portfolio'), where('provider_id', '==', user.uid))
+        const snap = await getDocs(q)
+        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        data.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+        setPortfolio(data)
+      } catch (err) {
+        console.error(err)
+      }
+    })
+    return () => unsubscribe()
   }, [])
 
   const handleUpload = async (e) => {
@@ -40,18 +46,22 @@ export default function PortfolioPage() {
       const ext = file.name.split('.').pop()
       const filename = `${providerId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
 
-      const { error: uploadError } = await supabase.storage
-        .from('portfolio')
-        .upload(filename, file)
-
-      if (!uploadError) {
-        const { data: urlData } = supabase.storage.from('portfolio').getPublicUrl(filename)
-        const { data: dbRow } = await supabase
-          .from('provider_portfolio')
-          .insert({ provider_id: providerId, image_url: urlData.publicUrl })
-          .select()
-          .single()
-        if (dbRow) setPortfolio((prev) => [...prev, dbRow])
+      try {
+        const storageRef = ref(storage, `portfolio/${providerId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`)
+        await uploadBytes(storageRef, file)
+        const publicUrl = await getDownloadURL(storageRef)
+        
+        const newDoc = {
+          provider_id: providerId,
+          image_url: publicUrl,
+          created_at: new Date().toISOString()
+        }
+        
+        const dbRef = await addDoc(collection(db, 'provider_portfolio'), newDoc)
+        setPortfolio((prev) => [{ id: dbRef.id, ...newDoc }, ...prev])
+      } catch (error) {
+        console.error("Upload error:", error)
+        toast.error(`Eroare la încărcarea imaginii ${file.name}`)
       }
     }
 
@@ -61,7 +71,7 @@ export default function PortfolioPage() {
   }
 
   const handleDelete = async (item) => {
-    await supabase.from('provider_portfolio').delete().eq('id', item.id)
+    await deleteDoc(doc(db, 'provider_portfolio', item.id))
     setPortfolio((prev) => prev.filter((p) => p.id !== item.id))
     toast.success('Imagine ștearsă')
   }

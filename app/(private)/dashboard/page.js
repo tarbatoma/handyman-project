@@ -1,20 +1,28 @@
-import { createClient } from '@/lib/supabase/server'
+import { cookies } from 'next/headers'
+import { adminAuth, adminDb } from '@/lib/firebase/server'
 import { redirect } from 'next/navigation'
 
 export default async function DashboardPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const cookieStore = await cookies()
+  const sessionCookie = cookieStore.get('session')?.value
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single()
+  if (!sessionCookie) redirect('/login')
 
-  if (profile?.role === 'provider') {
-    redirect('/dashboard/provider')
-  } else {
-    redirect('/dashboard/client')
+  let redirectTo = '/login'
+  
+  try {
+    const decodedClaims = await adminAuth.verifySessionCookie(sessionCookie, true)
+    const userDoc = await adminDb.collection('users').doc(decodedClaims.uid).get()
+    const profile = userDoc.data()
+
+    if (profile?.role === 'provider') {
+      redirectTo = '/dashboard/provider'
+    } else {
+      redirectTo = '/dashboard/client'
+    }
+  } catch (error) {
+    console.error('Session verification failed:', error)
   }
+
+  redirect(redirectTo)
 }
