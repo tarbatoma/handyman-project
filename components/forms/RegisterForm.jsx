@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { toast } from 'sonner'
-import { Eye, EyeOff, Loader2, User, Wrench } from 'lucide-react'
+import { Eye, EyeOff, Loader2, User, Wrench, Mail } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const registerSchema = z.object({
@@ -28,6 +28,8 @@ const registerSchema = z.object({
 function RegisterFormInner() {
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
+  const [registeredEmail, setRegisteredEmail] = useState('')
   const [selectedType, setSelectedType] = useState('client')
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -46,11 +48,11 @@ function RegisterFormInner() {
 
   const onSubmit = async (data) => {
     setLoading(true)
-    const { error } = await supabase.auth.signUp({
+    const { data: authData, error } = await supabase.auth.signUp({
       email: data.email,
       password: data.password,
       options: {
-        data: { full_name: data.fullName },
+        data: { full_name: data.fullName, role: selectedType },
       },
     })
 
@@ -60,7 +62,15 @@ function RegisterFormInner() {
       return
     }
 
-    // Update role in profiles table
+    // Dacă Supabase necesită confirmare pe email, session va fi null
+    if (authData?.user && !authData?.session) {
+      setRegisteredEmail(data.email)
+      setSubmitted(true)
+      setLoading(false)
+      return
+    }
+
+    // Update role in profiles table dacă sesiunea există deja (ex: email confirm dezactivat)
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
       await supabase
@@ -72,6 +82,36 @@ function RegisterFormInner() {
     toast.success('Cont creat cu succes!')
     router.push('/onboarding')
     router.refresh()
+  }
+
+  if (submitted) {
+    return (
+      <Card className="shadow-xl border-border/50 text-center py-8">
+        <CardHeader>
+          <div className="w-16 h-16 bg-primary/10 text-primary rounded-full flex items-center justify-center mx-auto mb-4">
+            <Mail className="w-8 h-8" />
+          </div>
+          <CardTitle className="text-2xl font-bold">Verifică-ți adresa de email</CardTitle>
+          <CardDescription className="text-base mt-2">
+            Am trimis un link de confirmare către<br />
+            <span className="font-semibold text-foreground">{registeredEmail}</span>
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground mb-6">
+            Dă click pe linkul din email pentru a-ți activa contul și a continua cu configurarea profilului.
+          </p>
+          <Button type="button" variant="outline" className="w-full" onClick={() => window.open('https://mail.google.com', '_blank')}>
+            Deschide Gmail
+          </Button>
+          <div className="mt-6 text-sm">
+            <button type="button" onClick={() => setSubmitted(false)} className="text-primary hover:underline">
+              Înapoi la înregistrare
+            </button>
+          </div>
+        </CardContent>
+      </Card>
+    )
   }
 
   return (
@@ -112,6 +152,7 @@ function RegisterFormInner() {
             <Label htmlFor="fullName">Nume complet</Label>
             <Input
               id="fullName"
+              autoComplete="name"
               placeholder="Ion Popescu"
               {...register('fullName')}
               className={errors.fullName ? 'border-destructive' : ''}
@@ -124,6 +165,7 @@ function RegisterFormInner() {
             <Input
               id="email"
               type="email"
+              autoComplete="email"
               placeholder="email@exemplu.ro"
               {...register('email')}
               className={errors.email ? 'border-destructive' : ''}
@@ -137,6 +179,7 @@ function RegisterFormInner() {
               <Input
                 id="password"
                 type={showPassword ? 'text' : 'password'}
+                autoComplete="new-password"
                 placeholder="Min. 8 caractere"
                 {...register('password')}
                 className={errors.password ? 'border-destructive pr-10' : 'pr-10'}
@@ -157,6 +200,7 @@ function RegisterFormInner() {
             <Input
               id="confirmPassword"
               type="password"
+              autoComplete="new-password"
               placeholder="••••••••"
               {...register('confirmPassword')}
               className={errors.confirmPassword ? 'border-destructive' : ''}

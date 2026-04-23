@@ -106,33 +106,31 @@ export default function Navbar() {
           <div className="hidden md:flex items-center gap-3">
             {user ? (
               <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button className="flex items-center gap-2 rounded-full p-1 hover:bg-accent transition-colors">
-                    <Avatar className="w-8 h-8">
-                      <AvatarImage src={profile?.avatar_url} />
-                      <AvatarFallback className="text-xs bg-primary text-white">
-                        {getInitials(profile?.full_name || user.email)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <span className={`text-sm font-medium hidden sm:block ${isHome && !scrolled ? 'text-white' : ''}`}>
-                      {profile?.full_name?.split(' ')[0] || 'Contul meu'}
-                    </span>
-                    <ChevronDown className={`w-4 h-4 ${isHome && !scrolled ? 'text-white/70' : 'text-muted-foreground'}`} />
-                  </button>
+                <DropdownMenuTrigger className="flex items-center gap-2 rounded-full p-1 hover:bg-accent transition-colors outline-none">
+                  <Avatar className="w-8 h-8">
+                    <AvatarImage src={profile?.avatar_url} />
+                    <AvatarFallback className="text-xs bg-primary text-white">
+                      {getInitials(profile?.full_name || user.email)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <span className={`text-sm font-medium hidden sm:block ${isHome && !scrolled ? 'text-white' : ''}`}>
+                    {profile?.full_name?.split(' ')[0] || 'Contul meu'}
+                  </span>
+                  <ChevronDown className={`w-4 h-4 ${isHome && !scrolled ? 'text-white/70' : 'text-muted-foreground'}`} />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuItem asChild>
-                    <Link href="/dashboard" className="flex items-center gap-2">
+                  <Link href="/dashboard" className="w-full">
+                    <DropdownMenuItem className="flex items-center gap-2 cursor-pointer">
                       <LayoutDashboard className="w-4 h-4" />
                       Dashboard
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link href="/dashboard/profile" className="flex items-center gap-2">
+                    </DropdownMenuItem>
+                  </Link>
+                  <Link href="/dashboard/profile" className="w-full">
+                    <DropdownMenuItem className="flex items-center gap-2 cursor-pointer">
                       <User className="w-4 h-4" />
                       Profilul meu
-                    </Link>
-                  </DropdownMenuItem>
+                    </DropdownMenuItem>
+                  </Link>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     onClick={handleSignOut}

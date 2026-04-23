@@ -13,10 +13,10 @@ export default async function PrivateLayout({ children }) {
     .from('profiles')
     .select('role, full_name, onboarding_completed')
     .eq('id', user.id)
-    .single()
+    .maybeSingle()
 
-  // Redirecționare la onboarding dacă nu e completat
-  if (!profile?.onboarding_completed) {
+  // Redirecționare la onboarding dacă nu e completat sau nu există profil
+  if (!profile || !profile.onboarding_completed) {
     redirect('/onboarding')
   }
 

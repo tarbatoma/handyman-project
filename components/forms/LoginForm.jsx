@@ -62,6 +62,7 @@ function LoginFormInner() {
             <Input
               id="email"
               type="email"
+              autoComplete="email"
               placeholder="email@exemplu.ro"
               {...register('email')}
               className={errors.email ? 'border-destructive' : ''}
@@ -82,6 +83,7 @@ function LoginFormInner() {
               <Input
                 id="password"
                 type={showPassword ? 'text' : 'password'}
+                autoComplete="current-password"
                 placeholder="••••••••"
                 {...register('password')}
                 className={errors.password ? 'border-destructive pr-10' : 'pr-10'}
